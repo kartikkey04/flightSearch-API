@@ -33,7 +33,31 @@ app.get("/search-flights", async (req, res) => {
       max: 2, // Limit results
     });
 
-    res.json({ flights: response.data });
+    const formattedFlights = response.data.map((flight) => ({
+      id: flight.id,
+      airline: flight.validatingAirlineCodes[0],
+      price: `${flight.price.currency} ${flight.price.grandTotal}`,
+      availableSeats: flight.numberOfBookableSeats,
+      itineraries: flight.itineraries.map(itinerary => ({
+        duration: itinerary.duration,
+        segments: itinerary.segments.map(segment => ({
+            departure: {
+                airport: segment.departure.iataCode,
+                time: segment.departure.at
+            },
+            arrival: {
+                airport: segment.arrival.iataCode,
+                time: segment.arrival.at
+            },
+            airline: segment.carrierCode,
+            flightNumber: segment.number,
+            aircraft: segment.aircraft.code,
+            duration: segment.duration
+        }))
+    }))
+    }))
+
+    res.json({ flights: formattedFlights });
   } catch (error) {
     console.error("Error fetching flights:", error.response?.data || error);
     res.status(500).json({ error: "Failed to fetch flights" });
