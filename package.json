@@ -4,7 +4,7 @@
   "description": "Making flight search api",
   "main": "index.js",
   "scripts": {
-    "dev": "nodemon server.ts"
+    "dev": "nodemon index.js"
   },
   "keywords": [
     "amadeus",
