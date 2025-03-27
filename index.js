@@ -7,6 +7,22 @@ const PORT = process.env.PORT || 5000;
 
 app.use(express.json());
 
+async function getAirportCode(city){
+  try{
+    const response = await amadeus.referenceData.locations.get({
+      keyword: city,
+      subType: "Airport"
+    });
+    if(response.data.length > 0){
+      return response.data[0].iataCode;
+    }
+    return null;
+  }catch(error){
+    console.error("Error fetching airport code:", error);
+    return null;
+  }
+}
+
 // Initialize Amadeus API
 const amadeus = new Amadeus({
   clientId: process.env.AMADEUS_API_KEY,
@@ -16,6 +32,9 @@ const amadeus = new Amadeus({
 // Flight Search API
 app.get("/search-flights", async (req, res) => {
   const { origin, destination, date, adults = 1 } = req.query;
+
+  if(origin.length > 3) origin = await getAirportCode(origin);
+  if(destination.length > 3) destination = await getAirportCode(destination);
 
   if (!origin || !destination || !date) {
     return res.status(400).json({ error: "Missing required parameters" });
