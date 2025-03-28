@@ -3,85 +3,104 @@ const express = require("express");
 const Amadeus = require("amadeus");
 
 const app = express();
-const PORT = process.env.PORT || 5000;
-
+const PORT = process.env.PORT || 8000;
 app.use(express.json());
 
-async function getAirportCode(city){
-  try{
-    const response = await amadeus.referenceData.locations.get({
-      keyword: city,
-      subType: "Airport"
-    });
-    if(response.data.length > 0){
-      return response.data[0].iataCode;
-    }
-    return null;
-  }catch(error){
-    console.error("Error fetching airport code:", error);
-    return null;
-  }
-}
-
-// Initialize Amadeus API
+// Initialize Amadeus FIRST
 const amadeus = new Amadeus({
   clientId: process.env.AMADEUS_API_KEY,
   clientSecret: process.env.AMADEUS_API_SECRET,
 });
 
-// Flight Search API
-app.get("/search-flights", async (req, res) => {
-  const { origin, destination, date, adults = 1 } = req.query;
+async function getLocationCode(input) {
+  try {
+    // Check for valid airport code first (3 letters)
+    if (input.length === 3) {
+      const airportResponse = await amadeus.referenceData.locations.get({
+        keyword: input,
+        subType: "AIRPORT",
+        view: "LIGHT"
+      });
 
-  if(origin.length > 3) origin = await getAirportCode(origin);
-  if(destination.length > 3) destination = await getAirportCode(destination);
+      // Find exact IATA code match
+      const exactMatch = airportResponse.data.find(
+        loc => loc.iataCode === input.toUpperCase()
+      );
+      
+      if (exactMatch) return exactMatch.iataCode;
+    }
 
-  if (!origin || !destination || !date) {
-    return res.status(400).json({ error: "Missing required parameters" });
+    // If not found, search as city/airport name
+    const locationResponse = await amadeus.referenceData.locations.get({
+      keyword: input,
+      subType: "AIRPORT,CITY",
+      view: "LIGHT"
+    });
+
+    // Priority: Airport > City
+    const bestMatch = locationResponse.data.find(loc => 
+      loc.subType === "AIRPORT" || loc.subType === "CITY"
+    );
+
+    return bestMatch?.iataCode || null;
+
+  } catch (error) {
+    console.error(`Conversion error for ${input}:`, error);
+    return null;
   }
+}
+
+app.get("/search-flights", async (req, res) => {
+  let { origin, destination, date, adults = 1 } = req.query;
 
   try {
+    // Convert both origin and destination
+    [origin, destination] = await Promise.all([
+      getLocationCode(origin),
+      getLocationCode(destination)
+    ]);
+
+    console.log(`Final codes - Origin: ${origin}, Destination: ${destination}`);
+
+    if (!origin || !destination || !date) {
+      return res.status(400).json({
+        error: "Invalid parameters",
+        details: `Could not resolve: ${!origin ? 'Origin' : ''} ${!destination ? 'Destination' : ''}`
+      });
+    }
+
     const response = await amadeus.shopping.flightOffersSearch.get({
       originLocationCode: origin,
       destinationLocationCode: destination,
       departureDate: date,
       adults,
       currencyCode: "USD",
-      max: 2, // Limit results
+      max: 5
     });
 
-    const formattedFlights = response.data.map((flight) => ({
+    const formattedFlights = response.data.map(flight => ({
       id: flight.id,
-      airline: flight.validatingAirlineCodes[0],
       price: `${flight.price.currency} ${flight.price.grandTotal}`,
-      availableSeats: flight.numberOfBookableSeats,
       itineraries: flight.itineraries.map(itinerary => ({
         duration: itinerary.duration,
         segments: itinerary.segments.map(segment => ({
-            departure: {
-                airport: segment.departure.iataCode,
-                time: segment.departure.at
-            },
-            arrival: {
-                airport: segment.arrival.iataCode,
-                time: segment.arrival.at
-            },
-            airline: segment.carrierCode,
-            flightNumber: segment.number,
-            aircraft: segment.aircraft.code,
-            duration: segment.duration
+          departure: `${segment.departure.iataCode} (${segment.departure.at})`,
+          arrival: `${segment.arrival.iataCode} (${segment.arrival.at})`,
+          airline: segment.carrierCode,
+          duration: segment.duration
         }))
-    }))
-    }))
+      }))
+    }));
 
     res.json({ flights: formattedFlights });
+
   } catch (error) {
-    console.error("Error fetching flights:", error.response?.data || error);
-    res.status(500).json({ error: "Failed to fetch flights" });
+    console.error("Search error:", error);
+    res.status(500).json({
+      error: "Flight search failed",
+      details: error.response?.data || error.message
+    });
   }
 });
 
-// Start Server
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
